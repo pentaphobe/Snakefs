@@ -4,14 +4,14 @@ open System
 open System.Threading.Tasks
 open System.Threading
 
-module SnakeGame = 
+module SnakeGame =
 
     /// 🚏 Directions on our grid:
     type Movement =
-        | Left of Position
-        | Right of Position
-        | Down of Position
-        | Up of Position
+        | Left
+        | Right
+        | Down
+        | Up
         | InvalidMove
 
     /// 🐍 Sort of like a list, but not:
@@ -21,18 +21,27 @@ module SnakeGame =
         | Tail
 
     /// 🕹️ Our basic runtime information:
-    and Game = 
+    and Game =
         | GameRunning of Movement * Snake<Position> * Grid * Eaten:int * Food
         | GameOver of Grid * Eaten:int
 
     /// 🧭 x & y in our plane:
     and Position = int * int
 
-    /// 🍎 The food our snake will eat:
-    and Food = Position * string
-    
+    /// 🍎 The food sprite our snake will eat:
+    and Food = Position * FoodType
+    ///    food can be of various types (this is just used to change how it's displayed)
+    and FoodType = int
+
+    /// Contents of our Grid
+    and Cell =
+        | SnakeHead
+        | SnakeBelly
+        | CellFood of FoodType
+        | CellEmpty
+
     /// 🌐 A simple two dimensional plane:
-    and Grid = string[][]
+    and Grid = Cell[][]
 
     /// Making a list of positions from a Snake 🐍
     let snakeUnzip (snake:Snake<Position>) =
@@ -42,7 +51,7 @@ module SnakeGame =
             | Belly (p, rest) -> unzip rest <| carry @ [p]
             | Tail -> carry
         unzip snake []
-        
+
     /// Making a Snake from a list of positions 🐍
     let snakeZip (positions:list<Position>) (upto:int) =
         let correctLength = (List.take upto positions)
@@ -53,44 +62,34 @@ module SnakeGame =
             | [] -> carry
         zip Tail (List.rev correctLength)
 
-    module Graphics = 
+    /// 🌍 Separate world logic from rendering
+    module World =
         let private random = new Random()
-        let private head = "🤢"
-        let private belly = "🟢"
-        let private display = "⬜"
-        let private errorDisplay = "🟥"
-
-        let private food = [|"🐁";"🐀";"🐥";"🪺";"🐸";"🐛";"🪰";"🐞";"🦗"|]
-        let private randomFood () = food.[random.Next(food.Length - 1)]
-
-        let isFood square = Array.contains square food
-        let isFreeSpace square = square = display || square = errorDisplay
-        let isOccupied square = 
-            match square with 
-            | square when isFreeSpace square -> false 
+        let isFood square =
+            match square with
+            | CellFood(_) -> true
+            | _ -> false
+        let isFreeSpace square = square = CellEmpty
+        let isOccupied square =
+            match square with
+            | square when isFreeSpace square -> false
             | square when isFood square -> false
             | _ -> true
 
-        let makeGrid (dimensionsSquared) : Grid = 
-            let row _ = Array.init dimensionsSquared (fun _ -> display)
+        let makeGrid (dimensionsSquared) : Grid =
+            let row _ = Array.init dimensionsSquared (fun _ -> CellEmpty)
             Array.init dimensionsSquared row
 
-        let clearGrid (grid:Grid) : unit =
-            Array.iteri (fun i row -> 
-                Array.iteri (fun j _ ->
-                    grid.[i].[j] <- display
+        // gives a new copy of grid with all cells filled
+        let fillGrid (cell:Cell) (grid:Grid) : Grid =
+            Array.map (fun row ->
+                Array.map (fun _ ->
+                    cell
                 ) row
             ) grid
 
-        let render (grid:Grid) : unit =
-            Console.Clear()
-            Array.iter (fun (row:string array) -> 
-                let prettyprint = String.concat "" row
-                printfn $"{prettyprint}") grid
-            printfn "Snake Game in FSharp by @wiredsister"
-            printfn "Controls: ⬅️ ↕️ ➡️"
-            printfn "Press Ctrl+C to Quit Game"
-            Console.Title <- "FSharp Snake 🐍"
+        // returns a new grid with all cells cleared
+        let clearGrid = fillGrid CellEmpty
 
         let getFreeSpaces (grid:Grid) : list<Position> =
             let results : Position list ref = ref []
@@ -102,133 +101,115 @@ module SnakeGame =
                 ()
             results.Value
 
-        let getFood (grid:Grid) : Food =
+        let getFood (grid:Grid) =
             Console.Beep()
-            let freeSpaces = 
+            let freeSpaces =
                 getFreeSpaces grid
                 |> Array.ofList
-            let food = randomFood ()
+            let food :FoodType = random.Next()
             let randomPos = freeSpaces.[random.Next(freeSpaces.Length - 1)]
             randomPos, food
 
-        let dropFood (grid:Grid) (food:Food) =
-            let (x, y), animal = food
-            grid.[x].[y] <- animal
+        let dropFood (food:Food)  (grid:Grid) =
+            let (x, y), foodType = food
+            // TODO: mutation
+            grid.[x].[y] <- CellFood(foodType)
+            grid
 
-        let slither (snake:Snake<Position>) (grid:Grid) : unit =
+        let slither (snake:Snake<Position>) (grid:Grid) : Grid =
             try
-                let rec slithering (body:Snake<Position>) =
+                let rec slithering (body:Snake<Position>) : Grid =
                     match body with
-                    | Head(p, s) -> 
+                    | Head(p, s) ->
                         let row, column = p
-                        grid.[row].[column] <- head 
+                        grid.[row].[column] <- SnakeHead
                         slithering s
-                    | Belly(p, s) -> 
+                    | Belly(p, s) ->
                         let row, column = p
-                        grid.[row].[column] <- belly 
+                        grid.[row].[column] <- SnakeBelly
                         slithering s
-                    | Tail -> ()
-                do slithering snake
+                    | Tail -> grid
+                slithering snake
             with _ -> failwith "ERROR: Could not slither snake!"
-        
-        let endGame (grid:Grid) : unit =
-            Console.Clear()
-            Array.iteri (fun i row -> 
-                Array.iteri (fun j _ ->
-                    grid.[i].[j] <- errorDisplay
-                ) row
+
+    module Graphics =
+        let private head = "🤢"
+        let private belly = "🟢"
+        let private display = "⬜"
+        let private errorDisplay = "🟥"
+
+        let private food = [|"🐁";"🐀";"🐥";"🪺";"🐸";"🐛";"🪰";"🐞";"🦗"|]
+
+        type ScreenTile = string
+        type ScreenBuffer = array<array<ScreenTile>>
+
+        // transform a logical Cell into a graphical screen tile
+        let spriteFor (cell:Cell) : ScreenTile =
+            match cell with
+                | SnakeHead -> head
+                | SnakeBelly -> belly
+                | CellFood(idx) -> food.[idx % food.Length]
+                | CellEmpty -> display
+
+        // transform a logical grid into a graphical screen buffer for display
+        let renderGrid (grid:Grid) : ScreenBuffer =
+            Array.map (fun (row:Cell array) ->
+                Array.map spriteFor row
             ) grid
-            Array.iter (fun (row:string array) -> 
-                let prettyprint = String.concat "" row
-                printfn $"{prettyprint}") grid
+
+        // display a
+        let displayBuffer(rows:ScreenBuffer) : unit =
+            Console.Clear()
+            Array.iteri(fun i row ->
+                let line = String.concat "" row
+                printfn $"{line}"
+            ) rows
+
+        let render (grid:Grid) : unit =
+            grid
+                |> renderGrid
+                |> displayBuffer
+            printfn "Snake Game in FSharp by @wiredsister"
+            printfn "Controls: ⬅️ ↕️ ➡️"
+            printfn "Press Ctrl+C to Quit Game"
+            Console.Title <- "FSharp Snake 🐍"
+
+        let renderEndGame (grid:Grid) : unit =
+            grid
+                |> renderGrid
+                |> Array.map (fun (r) -> Array.map (fun (t) -> errorDisplay) r)
+                |> displayBuffer
             Console.Beep()
 
-    
+
     module GamePlay =
-
-        let moveUp (snake:Snake<Position>) (grid:Grid) (eaten:int) (food:Food) : Game =
-            match snake with 
+        let move (direction:Movement) (snake:Snake<Position>) (grid:Grid) (eaten:int) (food:Food) : Game =
+            match snake with
             | Head (p, rest:Snake<Position>) ->
                 let x, y = p
-                let shiftUp = ((x-1), y)
+                let shift =
+                    match direction with
+                        | Up -> ((x-1), y)
+                        | Down -> ((x+1), y)
+                        | Left -> (x, (y-1))
+                        | Right -> (x, (y+1))
+                        | _ -> (x, y)
                 try
-                    match shiftUp with
-                    | (row,column) when Graphics.isOccupied grid.[row].[column] ->
+                    match shift with
+                    | (row,column) when World.isOccupied grid.[row].[column] ->
                         GameOver (grid, eaten)
-                    | (row, column) when Graphics.isFood grid.[row].[column] ->
-                        let unzipped = snakeUnzip (Head (shiftUp, (Belly (p, rest))))
+                    | (row, column) when World.isFood grid.[row].[column] ->
+                        let unzipped = snakeUnzip (Head (shift, (Belly (p, rest))))
                         let newSnake = snakeZip unzipped (eaten+1)
-                        let nextFood = Graphics.getFood grid
-                        GameRunning (Up shiftUp, newSnake, grid, eaten+1, nextFood)
+                        let nextFood = World.getFood grid
+                        GameRunning (direction, newSnake, grid, eaten+1, nextFood)
                     | pivot ->
                         let unzipped = snakeUnzip (Head (pivot, (Belly (p, rest))))
                         let newSnake = snakeZip unzipped eaten
-                        GameRunning (Up pivot, newSnake, grid, eaten, food)
+                        GameRunning (direction, newSnake, grid, eaten, food)
                 with _ -> GameOver (grid, eaten)
             | _ -> failwith "ERROR: No head!"
 
-        let moveDown (snake:Snake<Position>) (grid:Grid) (eaten:int) (food:Food) : Game =
-            match snake with 
-            | Head (p, rest:Snake<Position>) ->
-                let x, y = p
-                let shiftDown = ((x+1), y)
-                try
-                    match shiftDown with
-                    | (row,column) when Graphics.isOccupied grid.[row].[column] ->
-                        GameOver (grid, eaten)
-                    | (row, column) when Graphics.isFood grid.[row].[column] ->
-                        let unzipped = snakeUnzip (Head (shiftDown, (Belly (p, rest))))
-                        let newSnake = snakeZip unzipped (eaten+1)
-                        let nextFood = Graphics.getFood grid
-                        GameRunning (Down shiftDown, newSnake, grid, (eaten+1), nextFood)
-                    | pivot ->
-                        let unzipped = snakeUnzip (Head (pivot, (Belly (p, rest))))
-                        let newSnake = snakeZip unzipped eaten
-                        GameRunning (Down pivot, newSnake, grid, eaten, food)
-                with _ -> GameOver (grid, eaten)
-            | _ -> failwith "ERROR: No head!"
-
-        let moveLeft (snake:Snake<Position>) (grid:Grid) (eaten:int) (food:Food) : Game =
-            match snake with 
-            | Head (p, rest:Snake<Position>) ->
-                let x, y = p
-                let shiftLeft = (x, (y-1))
-                try
-                    match shiftLeft with
-                    | (row,column) when Graphics.isOccupied grid.[row].[column] ->
-                        GameOver (grid, eaten)
-                    | (row, column) when Graphics.isFood grid.[row].[column] ->
-                        let unzipped = snakeUnzip (Head (shiftLeft, (Belly (p, rest))))
-                        let newSnake = snakeZip unzipped (eaten+1)
-                        let nextFood = Graphics.getFood grid
-                        GameRunning (Left shiftLeft, newSnake, grid, eaten+1, nextFood)
-                    | pivot ->
-                        let unzipped = snakeUnzip (Head (pivot, (Belly (p, rest))))
-                        let newSnake = snakeZip unzipped eaten
-                        GameRunning (Left pivot, newSnake, grid, eaten, food)
-                with _ -> GameOver (grid, eaten)
-            | _ -> failwith "ERROR: No head!"
-
-        let moveRight (snake:Snake<Position>) (grid:Grid) (eaten:int) (food:Food) : Game =
-            match snake with 
-            | Head (p, rest:Snake<Position>) ->
-                let (x: int), y = p
-                let shiftRight = (x, (y+1))
-                try
-                    match shiftRight with
-                    | (row,column) when Graphics.isOccupied grid.[row].[column] ->
-                        GameOver (grid, eaten)
-                    | (row, column) when Graphics.isFood grid.[row].[column] ->
-                        let unzipped = snakeUnzip (Head (shiftRight, (Belly (p, rest))))
-                        let newSnake = snakeZip unzipped (eaten+1)
-                        let nextFood = Graphics.getFood grid
-                        GameRunning (Right shiftRight, newSnake, grid, eaten+1, nextFood)
-                    | pivot ->
-                        let unzipped = snakeUnzip (Head (pivot, (Belly (p, rest))))
-                        let newSnake = snakeZip unzipped eaten
-                        GameRunning (Right pivot, newSnake, grid, eaten, food)
-                with _ -> GameOver (grid, eaten)
-            | _ -> failwith "ERROR: No head!"
 
 open SnakeGame
 
@@ -238,61 +219,56 @@ let main _ =
     /// A gentle slope function for making the snake go faster:
     let tick (eaten:int) = 100./log10(float eaten) |> int
 
-    let getNextMove prev snake grid eaten food : Task<Game> = 
+    let getNextMove prev snake grid eaten food : Task<Game> =
         task {
             do! Task.Delay(tick(eaten))
             if not Console.KeyAvailable
-            then 
+            then
+                // keep moving in the same direction
                 match prev with
-                    | Up _ -> return GamePlay.moveUp snake grid eaten food
-                    | Down _ -> return GamePlay.moveDown snake grid eaten food
-                    | Right _ -> return GamePlay.moveRight snake grid eaten food
-                    | Left _ -> return GamePlay.moveLeft snake grid eaten food
                     | InvalidMove -> return GameOver (grid, eaten)
+                    | _  -> return GamePlay.move prev snake grid eaten food
             else
-                match Console.ReadKey() with
-                | keystroke when keystroke.Key.Equals(ConsoleKey.UpArrow) ->
-                    return GamePlay.moveUp snake grid eaten food
-                | keystroke when keystroke.Key.Equals(ConsoleKey.DownArrow) ->
-                    return GamePlay.moveDown snake grid eaten food
-                | keystroke when keystroke.Key.Equals(ConsoleKey.RightArrow) ->
-                    return GamePlay.moveRight snake grid eaten food
-                | keystroke when keystroke.Key.Equals(ConsoleKey.LeftArrow) ->
-                    return GamePlay.moveLeft snake grid eaten food
+                // try changing direction
+                match Console.ReadKey().Key with
+                | ConsoleKey.UpArrow ->
+                    return GamePlay.move Up snake grid eaten food
+                | ConsoleKey.DownArrow ->
+                    return GamePlay.move Down snake grid eaten food
+                | ConsoleKey.RightArrow ->
+                    return GamePlay.move Right snake grid eaten food
+                | ConsoleKey.LeftArrow ->
+                    return GamePlay.move Left snake grid eaten food
                 | _ ->
                     match prev with
-                    | Up _ -> return GamePlay.moveUp snake grid eaten food
-                    | Down _ -> return GamePlay.moveDown snake grid eaten food
-                    | Right _ -> return GamePlay.moveRight snake grid eaten food
-                    | Left _ -> return GamePlay.moveLeft snake grid eaten food
                     | InvalidMove -> return GameOver (grid, eaten)
+                    | _ -> return GamePlay.move prev snake grid eaten food
         }
 
     let gridDimension = 20
     let segments = [(0,3); (0,2); (0,1); (0,0)]
     let youngSnake : Snake<Position> = snakeZip segments segments.Length
-    let startingGrid = Graphics.makeGrid gridDimension
-    let startingFood = Graphics.getFood startingGrid
-    let start = GamePlay.moveRight youngSnake startingGrid segments.Length startingFood
-    
+    let startingGrid = World.makeGrid gridDimension
+    let startingFood = World.getFood startingGrid
+    let start = GamePlay.move Right youngSnake startingGrid segments.Length startingFood
+
     let rec gameLoop (game:Game) =
         match game with
         | GameRunning (prev, snake, grid, eaten, food) ->
-            do Graphics.clearGrid grid
-            do Graphics.dropFood grid food
-            do Graphics.slither snake grid
-            do Graphics.render grid
-            let eitherPlayerOrCursor = getNextMove prev snake grid eaten food
+            let grid' = grid |> World.clearGrid |> World.dropFood food |> World.slither snake
+
+            do Graphics.render grid'
+            let eitherPlayerOrCursor = getNextMove prev snake grid' eaten food
             do eitherPlayerOrCursor.Wait()
             gameLoop eitherPlayerOrCursor.Result
         | GameOver (grid,eaten) ->
-            do Graphics.endGame grid
+            do Graphics.renderEndGame grid
             printfn $"Game Over! Snake ate {eaten-segments.Length} critters!"
             do Thread.Sleep(1000)
             let rec wantToPlayAgain () =
-                match Console.ReadKey() with
-                | keystroke when keystroke.Key.Equals(ConsoleKey.Y)  -> gameLoop start
-                | keystroke when keystroke.Key.Equals(ConsoleKey.N)  -> ()
+                match Console.ReadKey().Key with
+                | ConsoleKey.Y  -> gameLoop start
+                | ConsoleKey.N  -> ()
                 | _ -> wantToPlayAgain ()
             printfn $"Restart? Type Y to continue..."
             wantToPlayAgain()
